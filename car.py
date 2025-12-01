@@ -96,19 +96,31 @@ class MotorManager:
         self.left.move(-speed)
         return True
         
-    def turnLeft(self, speed=defaultSpeed):
+    def turnLeft_Forward(self, speed=defaultSpeed):
         self.lastAction = ("left", speed)
         print("Robot turn left")
         self.right.move(speed)
         self.left.stop()
         return True
         
-    def turnRight(self, speed=defaultSpeed):
+    def turnRight_Forward(self, speed=defaultSpeed):
         self.lastAction = ("right", speed)
         print("Robot turn right")
         self.right.stop()
         self.left.move(speed)
         return True
+    
+    def turnLeft_Backward(self, speed=defaultSpeed):
+        self.lastAction = ("left_backward", speed)
+        self.right.stop()
+        self.left.move(-speed)
+        return True
+    
+    def turnRight_Backward(self, speed=defaultSpeed):
+        self.lastAction = ("right_backward", speed)
+        self.right.move(-speed)
+        self.left.stop()
+        return True    
         
     def stop(self):
         self.lastAction = ("stop", 0)
