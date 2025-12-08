@@ -127,6 +127,29 @@ class MotorManager:
         print("Robot stopped")
         self.left.stop()
         self.right.stop()
+        
+    def start(self, speed=defaultSpeed):
+        self.running = True
+        self.forward(speed)
+
+    def pause(self):
+        print("MotorManager: PAUSED")
+        self.running = False
+        self.stop()
+
+    def resume(self):
+        print("MotorManager: RESUMED")
+        self.running = True
+        lastAction, speed = self.lastAction
+        self.apply(lastAction, speed)
+
+    def apply(self, action, speed):
+        """Ré-exécute une action depuis son nom."""
+        if action == "forward": self.forward(speed)
+        elif action == "backward": self.backward(speed)
+        elif action == "left": self.turnLeft_Forward(speed)
+        elif action == "right": self.turnRight_Forward(speed)
+        elif action == "stop": self.stop()
 
 
 
