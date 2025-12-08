@@ -1,209 +1,94 @@
-from time import sleep
-from machine import Pin, PWM, time_pulse_us
-import uasyncio as asyncio
+# ===== VOITURE ESP32 =====
+from machine import Pin, PWM
+import espnow
+import network
+import ujson
 
-# ============== PIN CONFIGURATION =================
+# --- Moteurs ---
+RIGHT_F = Pin(13, Pin.OUT)
+RIGHT_B = Pin(12, Pin.OUT)
+ENA     = PWM(Pin(14), freq=1000)
 
-TRIG_PIN   = 4
-ECHO_PIN   = 16
+LEFT_F  = Pin(26, Pin.OUT)
+LEFT_B  = Pin(25, Pin.OUT)
+ENB     = PWM(Pin(27), freq=1000)
 
-MOTOR_RIGHT_FORWARD  = 13
-MOTOR_RIGHT_BACKWARD = 12
-ENA        = 14
+speed = 800
 
-MOTOR_LEFT_FORWARD   = 26
-MOTOR_LEFT_BACKWARD  = 25
-ENB        = 27
+def forward():
+    RIGHT_F.on(); RIGHT_B.off()
+    LEFT_F.on();  LEFT_B.off()
+    ENA.duty(speed); ENB.duty(speed)
 
-defaultSpeed = 800  # vitesse d'avance (512 à 1023)
+def backward():
+    RIGHT_F.off(); RIGHT_B.on()
+    LEFT_F.off();  LEFT_B.on()
+    ENA.duty(speed); ENB.duty(speed)
 
-# ============== HARDWARE INITIALISATION ==============
+def left():
+    RIGHT_F.on(); RIGHT_B.off()
+    LEFT_F.off(); LEFT_B.off()
+    ENA.duty(speed); ENB.duty(0)
 
-# Motor right pins
-inRight_Forward = Pin(MOTOR_RIGHT_FORWARD, Pin.OUT)
-inRight_Backward = Pin(MOTOR_RIGHT_BACKWARD, Pin.OUT)
-ena = PWM(Pin(ENA), freq=1000)
+def right():
+    RIGHT_F.off(); RIGHT_B.off()
+    LEFT_F.on(); LEFT_B.off()
+    ENA.duty(0); ENB.duty(speed)
 
-# Motor left pins
-inLeft_Forward = Pin(MOTOR_LEFT_FORWARD, Pin.OUT)
-inLeft_Backward = Pin(MOTOR_LEFT_BACKWARD, Pin.OUT)
-enb = PWM(Pin(ENB), freq=1000)
+def stop():
+    RIGHT_F.off(); RIGHT_B.off()
+    LEFT_F.off(); LEFT_B.off()
+    ENA.duty(0); ENB.duty(0)
 
-# Ultrasonic sensor pins
-trig = Pin(TRIG_PIN, Pin.OUT)
-echo = Pin(ECHO_PIN, Pin.IN)
+# --- ESP-NOW init ---
+w0 = network.WLAN(network.STA_IF)
+w0.active(True)
 
-# ==================== CLASSES =====================
+e = espnow.ESPNow()
+e.active(True)
 
-class Motor:
-    def __init__(self, PIN_FORWARD, PIN_BACKWARD, PWM_CHANNEL, speed=0):
-        self.forward = PIN_FORWARD
-        self.backward = PIN_BACKWARD
-        self.en = PWM_CHANNEL
-        self.speed = speed
+print("CAR READY")
 
-    def move(self, speed):
-        if speed is None:
-            return
-        
-        self.speed = speed
+while True:
+    host, msg = e.recv()
 
-        if speed < 512:
-            self.moveBackward()
-        else:
-            self.moveForward()
+    if not msg:
+        continue
 
-    def moveForward(self):
-        self.forward.value(1)
-        self.backward.value(0)
-        pwm_value = self.speed - 512
-        if pwm_value < 0: pwm_value = 0
-        self.en.duty(pwm_value)
-        
+    cmd = msg.decode()
 
-    def moveBackward(self):
-        self.forward.value(0)
-        self.backward.value(1)
-        pwm_value = 512 - self.speed
-        if pwm_value < 0: pwm_value = 0
-        self.en.duty(pwm_value)       
+    # Commandes manuelles
+    if cmd == "F":
+        forward()
+    elif cmd == "B":
+        backward()
+    elif cmd == "L":
+        left()
+    elif cmd == "R":
+        right()
+    elif cmd == "S":
+        stop()
 
-    def stop(self):
-        self.forward.value(0)
-        self.backward.value(0)
-        self.en.duty(0)
-        self.speed = 0
+    # --- Mode autonome : réception d’un parcours ---
+    elif cmd.startswith("P"):
+        print("RECU PARCOURS")
+        steps = ujson.loads(cmd[1:])
+        print(steps)
 
+        # Exécution du parcours
+        for action, duration in steps:
+            if action == "F":
+                forward()
+            elif action == "B":
+                backward()
+            elif action == "L":
+                left()
+            elif action == "R":
+                right()
+            else:
+                stop()
 
-class MotorManager:
-    def __init__(self, leftMotor, rightMotor):
-        self.left = leftMotor
-        self.right = rightMotor
-        self.running = False
-        self.lastAction = None
+            time.sleep_ms(duration)
 
-    def forward(self, speed=defaultSpeed):
-        self.lastAction = ("forward", speed)
-        print("Robot move forward")
-        self.right.move(speed)
-        self.left.move(speed)
-        return True
-        
-    def backward(self, speed=defaultSpeed):
-        self.lastAction = ("backward", speed)
-        print("Robot move backward")
-        self.right.move(-speed)
-        self.left.move(-speed)
-        return True
-        
-    def turnLeft_Forward(self, speed=defaultSpeed):
-        self.lastAction = ("left", speed)
-        print("Robot turn left")
-        self.right.move(speed)
-        self.left.stop()
-        return True
-        
-    def turnRight_Forward(self, speed=defaultSpeed):
-        self.lastAction = ("right", speed)
-        print("Robot turn right")
-        self.right.stop()
-        self.left.move(speed)
-        return True
-    
-    def turnLeft_Backward(self, speed=defaultSpeed):
-        self.lastAction = ("left_backward", speed)
-        self.right.stop()
-        self.left.move(-speed)
-        return True
-    
-    def turnRight_Backward(self, speed=defaultSpeed):
-        self.lastAction = ("right_backward", speed)
-        self.right.move(-speed)
-        self.left.stop()
-        return True    
-        
-    def stop(self):
-        self.lastAction = ("stop", 0)
-        print("Robot stopped")
-        self.left.stop()
-        self.right.stop()
-        
-    def start(self, speed=defaultSpeed):
-        self.running = True
-        self.forward(speed)
-
-    def pause(self):
-        print("MotorManager: PAUSED")
-        self.running = False
-        self.stop()
-
-    def resume(self):
-        print("MotorManager: RESUMED")
-        self.running = True
-        lastAction, speed = self.lastAction
-        self.apply(lastAction, speed)
-
-    def apply(self, action, speed):
-        """Ré-exécute une action depuis son nom."""
-        if action == "forward": self.forward(speed)
-        elif action == "backward": self.backward(speed)
-        elif action == "left": self.turnLeft_Forward(speed)
-        elif action == "right": self.turnRight_Forward(speed)
-        elif action == "stop": self.stop()
-
-
-
-# ================== SENSOR FUNCTIONS ==================
-
-def getSensorDistance():
-    # send trigger pulse
-    trig.off()
-    sleep(0.002)
-    trig.on()
-    sleep(0.00001)
-    trig.off()
-
-    try:
-        duration = time_pulse_us(echo, 1, 30000)
-        distance_cm = (duration / 2) / 29.1
-        return distance_cm
-    except OSError:
-        return 0
-
-
-# ================ ASYNC SENSOR TASK =================
-
-async def manageSensor(manager):
-    print("Sensor loop started...")
-    while True:
-        distance = getSensorDistance()
-
-        if distance < 15 and manager.running:
-            print("Obstacle detected at:", distance, "cm")
-            manager.pause()
-
-        if distance >= 15 and not manager.running:
-            print("Obstacle cleared at:", distance, "cm")
-            manager.resume()
-
-        await asyncio.sleep_ms(50)
-
-
-# ================ MAIN ASYNC PROGRAM ================
-
-async def main():
-    manager = MotorManager(leftMotor, rightMotor)
-
-    # Start robot immediately
-    manager.start(defaultSpeed)
-
-    # Run sensor task in parallel
-    await manageSensor(manager)
-
-
-# =================== RUN =====================
-
-rightMotor = Motor(inRight_Forward, inRight_Backward, ena)
-leftMotor  = Motor(inLeft_Forward, inLeft_Backward, enb)
-
-asyncio.run(main())
+        stop()
+        print("PARCOURS TERMINE")
